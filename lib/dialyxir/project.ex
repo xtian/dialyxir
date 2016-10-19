@@ -158,15 +158,27 @@ defmodule Dialyxir.Project do
 
   @spec reduce_umbrella_children(a, (a -> a)) :: a when a: term()
   defp reduce_umbrella_children(acc,f) do
-    if Mix.Project.umbrella? do
-      children = Mix.Dep.Umbrella.loaded
-      Enum.reduce(children, acc,
-        fn(child, acc) ->
-          Mix.Project.in_project(child.app, child.opts[:path],
-                                 fn _ -> reduce_umbrella_children(acc,f) end)
-        end)
+    #first off, are we a child? Mix won't tell us outright.
+    #infer it by reference to a lockfile in parent folder
+    if String.contains?(Mix.Project.config[:lockfile], "..")
+                        && acc == [] do
+      parent_dir = (Mix.Project.config[:lockfile]
+                      |> Path.expand()
+                      |> Path.dirname())
+      parent = String.to_atom(Path.basename(parent_dir))
+      Mix.Project.in_project(parent, parent_dir, fn _ ->
+                             reduce_umbrella_children(acc,f) end)
     else
-      f.(acc)
+      if Mix.Project.umbrella? do
+        children = Mix.Dep.Umbrella.unloaded
+        Enum.reduce(children, acc,
+          fn(child, acc) ->
+            Mix.Project.in_project(child.app, child.opts[:path],
+              fn _ -> reduce_umbrella_children(acc,f) end)
+          end)
+      else
+        f.(acc)
+      end
     end
   end
 

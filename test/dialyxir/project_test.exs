@@ -66,7 +66,6 @@ defmodule Dialyxir.ProjectTest do
     end
   end
 
-  @tag :skip
   test "App list for umbrella contains all child dependencies
   when run from child directory" do
     in_project [:umbrella, :apps, :second_one], fn ->

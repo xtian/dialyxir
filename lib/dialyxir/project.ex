@@ -99,18 +99,34 @@ defmodule Dialyxir.Project do
     end
   end
 
-  defp include_deps do
+  defp include_deps(origin \\ true) do
     method = dialyzer_config[:plt_add_deps]
-    reduce_umbrella_children([],fn(deps) ->
+    acc_deps = fn(deps) ->
       deps ++ case method do
-        false         -> []
-        true          -> deps_project()  ++ deps_app(false) #compatibility
-        :project      -> deps_project() ++ deps_app(false)
-        :apps_direct  -> deps_app(false)
-        :transitive   -> deps_transitive() ++ deps_app(true)
-        _apps_tree    -> deps_app(true)
-      end
-    end)
+                false         -> []
+                true          -> deps_project() ++ deps_app(false) #compatibility
+                :project      -> deps_project() ++ deps_app(false)
+                :apps_direct  -> deps_app(false)
+                :transitive   -> deps_transitive() ++ deps_app(true)
+                _apps_tree    -> deps_app(true)
+              end
+    end
+    #Are we a child of an umbrella project?
+    #Mix won't tell us outright; so look for a back reference
+    #to a lock file. For a child, we'll find our parent and recurse
+    #down from them, skipping ourself because we're already loaded.
+    if origin == true && String.contains?(Mix.Project.config[:lockfile], "..") do
+      parent_dir = (Mix.Project.config[:lockfile]
+                      |> Path.expand()
+                      |> Path.dirname())
+      parent = String.to_atom(Path.basename(parent_dir))
+      this_app = Mix.Project.config[:app]
+      Mix.Project.in_project(parent, parent_dir, fn _ ->
+                    include_deps(this_app)
+                  end) |> acc_deps.()
+    else
+      reduce_umbrella_children([],acc_deps, origin)
+    end
   end
 
   defp deps_project do
@@ -147,7 +163,6 @@ defmodule Dialyxir.Project do
     end
   end
 
-
   defp env_dep(dep) do
     only_envs = dep_only(dep)
     only_envs == nil || Mix.env in List.wrap(only_envs)
@@ -156,29 +171,19 @@ defmodule Dialyxir.Project do
   defp dep_only({_, _, opts}) when is_list(opts), do: opts[:only]
   defp dep_only(_), do: nil
 
-  @spec reduce_umbrella_children(a, (a -> a)) :: a when a: term()
-  defp reduce_umbrella_children(acc,f) do
-    #first off, are we a child? Mix won't tell us outright.
-    #infer it by reference to a lockfile in parent folder
-    if String.contains?(Mix.Project.config[:lockfile], "..")
-                        && acc == [] do
-      parent_dir = (Mix.Project.config[:lockfile]
-                      |> Path.expand()
-                      |> Path.dirname())
-      parent = String.to_atom(Path.basename(parent_dir))
-      Mix.Project.in_project(parent, parent_dir, fn _ ->
-                             reduce_umbrella_children(acc,f) end)
+  @spec reduce_umbrella_children(a, (a -> a), atom()) :: a when a: term()
+  defp reduce_umbrella_children(acc,f, exclude_project \\ false) do
+    if Mix.Project.umbrella? do
+      children = Mix.Dep.Umbrella.unloaded
+                   |> Enum.filter(&(&1.app != exclude_project))
+      Enum.reduce(children, acc,
+        fn(child, acc) ->
+          Mix.Dep.Loader.load(child, nil)
+          Mix.Project.in_project(child.app, child.opts[:path],
+            fn _ -> reduce_umbrella_children(acc,f) end)
+        end)
     else
-      if Mix.Project.umbrella? do
-        children = Mix.Dep.Umbrella.unloaded
-        Enum.reduce(children, acc,
-          fn(child, acc) ->
-            Mix.Project.in_project(child.app, child.opts[:path],
-              fn _ -> reduce_umbrella_children(acc,f) end)
-          end)
-      else
-        f.(acc)
-      end
+      f.(acc)
     end
   end
 

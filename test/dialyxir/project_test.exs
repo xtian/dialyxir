@@ -55,6 +55,7 @@ defmodule Dialyxir.ProjectTest do
     end
   end
 
+  @tag :skip
   test "App list for umbrella contains child dependencies
   indirect :application dependencies" do
     in_project :umbrella, fn ->

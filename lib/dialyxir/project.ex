@@ -101,15 +101,18 @@ defmodule Dialyxir.Project do
 
   defp include_deps(origin \\ true) do
     method = dialyzer_config[:plt_add_deps]
-    acc_deps = fn(deps) ->
-      deps ++ case method do
-                false         -> []
-                true          -> deps_project() ++ deps_app(false) #compatibility
-                :project      -> deps_project() ++ deps_app(false)
-                :apps_direct  -> deps_app(false)
-                :transitive   -> deps_transitive() ++ deps_app(true)
-                _apps_tree    -> deps_app(true)
-              end
+    acc_deps = fn(acc) ->
+      deps = case method do
+               false         -> []
+               true          -> deps_project() ++ deps_app(false) #compatibility
+               :project      -> deps_project() ++ deps_app(false)
+               :apps_direct  -> deps_app(false)
+               :transitive   -> deps_transitive() ++ deps_app(true)
+               _apps_tree    -> deps_app(true)
+             end
+      IO.puts("\nProject: " <> Atom.to_string(Mix.Project.config[:app]))
+      IO.inspect deps
+      acc ++ deps
     end
     #Are we a child of an umbrella project?
     #Mix won't tell us outright; so look for a back reference
@@ -119,9 +122,13 @@ defmodule Dialyxir.Project do
       parent_dir = (Mix.Project.config[:lockfile]
                       |> Path.expand()
                       |> Path.dirname())
-      parent = String.to_atom(Path.basename(parent_dir))
+      parent = parent_dir |> Path.basename |> String.downcase |> String.to_atom
       this_app = Mix.Project.config[:app]
       Mix.Project.in_project(parent, parent_dir, fn _ ->
+        # loading would fix the 'app' file not found issue, but
+        # we cannot load the umbrella; second_one is already loaded
+                    #Mix.Tasks.Deps.Loadpaths.run([])
+                    #Mix.Project.compile([])
                     include_deps(this_app)
                   end) |> acc_deps.()
     else
@@ -152,7 +159,11 @@ defmodule Dialyxir.Project do
                 else
                   fn _ -> [] end
                 end
-    Application.load(app)
+    :ok = case Application.load(app) do
+      {:error, {:already_loaded, _}} -> :ok
+      e -> e
+    end
+    apps = Application.spec(app, :applications)
     case Application.spec(app, :applications) do
       []        -> []
       nil       -> []
